@@ -98,14 +98,13 @@ function getGitHubData() {
             reviewedPRs,
             comments,
             commits,
-        }) => {
-            return Promise.all(_.map(
-                reviewedPRs,
-                reviewedPR => octokit.paginate(
-                    `GET ${reviewedPR.url.slice('https://api.github.com'.length)}/timeline`,
-                    {headers: {Accept: 'application/vnd.github.mockingbird-preview'}}
-                )
-            ))
+        }) => Promise.all(_.map(
+                    reviewedPRs,
+                    reviewedPR => octokit.paginate(
+                        `GET ${reviewedPR.url.slice('https://api.github.com'.length)}/timeline`,
+                        {headers: {Accept: 'application/vnd.github.mockingbird-preview'}}
+                    )
+                ))
                 .then(events => _.filter(events, event => event.event === 'reviewed' && event.user.login === username))
                 .then(reviews => ({
                     issues,
@@ -113,7 +112,31 @@ function getGitHubData() {
                     comments,
                     commits,
                 }))
-        })
+        )
+        .then(({
+            issues,
+            reviews,
+            comments,
+            commits,
+        }) => Promise.all(_.map(
+                commits,
+                commit => octokit.repos.listPullRequestsAssociatedWithCommit({
+                    owner: 'Expensify',
+                    repo: commit.repository.name,
+                    commit_sha: commit.sha,
+                })
+                    .then(({data}) => ({
+                        ...commit,
+                        associatedPullRequests: _.filter(data, pr => pr.user.login === username),
+                    }))
+            ))
+            .then(commits => ({
+                issues,
+                reviews,
+                comments,
+                commits: _.filter(commits, commit => !_.isEmpty(commit.associatedPullRequests)),
+            }))
+        )
         .catch((e) => {
             console.error('Error: Unexpected GitHub API error –', e);
             printUsage();
@@ -123,13 +146,35 @@ function getGitHubData() {
 // Format date to match 10am output
 const outputDate = moment(argv.date).format('MMM Do YYYY dddd').toUpperCase();
 getGitHubData()
-    .then(({issues, reviews, commits, comments}) => {
+    .then(({issues, reviews, comments, commits}) => {
         let output = `\n${outputDate} [Note: GH Activity]\n`;
-        _.each(issues, issue => output += `• GH: [${issue.pull_request ? 'PR' : 'Issue'} #${issue.number}](${issue.html_url}) – ${issue.title}\n`);
+        _.each(issues, issue => output += `• GH: Created [${issue.pull_request ? 'PR' : 'Issue'} #${issue.number}](${issue.html_url}) – ${issue.title}\n`);
+
+        const updatedPRsWithCommits = _.chain(commits)
+            .reduce(
+                (memo, commit) => {
+                    _.each(commit.associatedPullRequests, pr => {
+                        if (!_.has(memo, pr.number)) {
+                            memo[pr.number] = {
+                                url: pr.html_url,
+                                commits: [commit],
+                            }
+                        } else {
+                            memo[pr.number].commits += commit;
+                        }
+                    })
+                    return memo;
+                },
+                {},
+            )
+            .omit(_.pluck(issues, 'number'))
+            .value();
+
+        _.each(updatedPRsWithCommits, (prWithCommits, prNumber) => {
+            output += `• GH: Updated PR #${prNumber} with the following commits: [\n\t• ${_.pluck(prWithCommits.commits, 'html_url').join('\n\t• ')}\n  ]\n`;
+        })
+
         _.each(reviews, review => output += `• GH: [Reviewed PR #${review.pull_request_url.split('/').pop()}](${review.html_url})`)
-        if (!_.isEmpty(commits)) {
-            output += `• GH: Commits – [\n\t• ${_.pluck(commits, 'html_url').join('\n\t• ')}\n  ]\n`;
-        }
         if (!_.isEmpty(comments)) {
             output += `• GH: Comments – [\n\t• ${_.pluck(comments, 'html_url').join('\n\t• ')}\n  ]\n`;
         }
