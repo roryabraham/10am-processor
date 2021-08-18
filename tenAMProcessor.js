@@ -135,12 +135,6 @@ const tenAMs = _.mapObject(
         }
     ),
 );
-// const tenAMs = _.mapObject(monthlyData,(monthData, year) => _.mapObject(monthData, (tenAMData) => (
-//     _.chain(tenAMData.split(new RegExp(`(?:${MONTHS_3_DIGIT.join('|')}) \\d+(?:ST|ND|RD|TH) \\d+ (?:${WEEKDAYS.join('|')})`)))
-//         .filter(item => Boolean(item))
-//         .map(item => item.trim().split('\n'))
-//         .value()
-// )));
 
 // Next, parse project tab csv data
 let projectTabData = _.map(
