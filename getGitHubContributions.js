@@ -131,11 +131,11 @@ function getGitHubData() {
                         associatedPullRequests: _.filter(data, pr => pr.user.login === username),
                     }))
             ))
-            .then(commits => ({
+            .then(commitsWithAssociatedPullRequests => ({
                 issues,
                 reviews,
                 comments,
-                commits: _.filter(commits, commit => !_.isEmpty(commit.associatedPullRequests)),
+                commits: _.filter(commitsWithAssociatedPullRequests, commit => !_.isEmpty(commit.associatedPullRequests)),
             }))
         )
         .then(({
@@ -220,7 +220,7 @@ getGitHubData()
                                     commits: [commit],
                                 }
                             } else {
-                                memo[pr.number].commits += commit;
+                                memo[pr.number].commits.push(commit);
                             }
                         })
                         return memo;
