@@ -5,36 +5,37 @@ const { exit } = require('process');
 const moment = require('moment-timezone');
 const {Octokit} = require('@octokit/rest');
 const {throttling} = require('@octokit/plugin-throttling');
+const yargs = require('yargs');
+const DateUtils = require('./dateUtils');
 
-const argv = require('yargs/yargs')(process.argv.slice(2)).argv;
+const argv = yargs
+    .options({
+        'token': {type: 'string', alias: 't', demandOption: true, describe: 'GitHub Personal Access Token (PAT)'},
+        'date': {type: 'string', alias: 'd', describe: 'Specific date to find data for', conflicts: ['startDate', 'endDate']},
+        'startDate': {type: 'string', describe: 'Beginning of date range to find data for', implies: 'endDate', conflicts: 'date'},
+        'endDate': {type: 'string', describe: 'End of date range to find data for', implies: 'startDate', conflicts: 'date'},
+    })
+    .check((argv) => {
+        _.each(_.pick(argv, ['date', 'startDate', 'endDate']), (date, option) => {
+            if (!moment(date).isValid()) {
+                throw new Error(`Error: ${option} ${date} is not a valid date`);
+            }
+        })
 
-function printUsage () {
-    console.error('Invalid usage – Must provide a GitHub token and a date. Example:\n\t./getGitHubContributions.js --token=XXX --date=2021-01-01');
-    exit(1);
-}
+        if (!_.isEmpty(argv.startDate) && !_.isEmpty(argv.endDate) && moment(argv.startDate).isAfter(argv.endDate)) {
+            throw new Error(`Error: startDate ${argv.startDate} is after endDate ${argv.endDate}`);
+        }
 
-if (_.isEmpty(argv.token)) {
-    console.error('Error: No GitHub token provided');
-    printUsage();
-}
-
-if (_.isEmpty(argv.date)) {
-    console.error('Error: No date provided');
-    printUsage();
-}
-
-if (!moment(argv.date).isValid()) {
-    console.error('Error: Invalid date');
-    printUsage();
-}
+        return true;
+    }).argv;
 
 // Adjust date for timezone for GitHub
 const GITHUB_TIMEZONE_FORMAT = 'YYYY-MM-DDTHH:mm:ssZ';
-const startDate = moment.tz(`${argv.date} 00:00:00`, 'America/Los_Angeles')
+const startDate = moment.tz(`${argv.startDate ?? argv.date} 00:00:00`, 'America/Los_Angeles')
     .format(GITHUB_TIMEZONE_FORMAT);
-const endDate = moment.tz(`${argv.date} 23:59:59`, 'America/Los_Angeles')
+const endDate = moment.tz(`${argv.endDate ?? argv.date} 23:59:59`, 'America/Los_Angeles')
     .format(GITHUB_TIMEZONE_FORMAT);
-const twoWeeksBefore = moment.tz(`${argv.date} 00:00:00`, 'America/Los_Angeles')
+const twoWeeksBefore = moment.tz(`${argv.startDate ?? argv.date} 00:00:00`, 'America/Los_Angeles')
     .subtract(14, 'days')
     .format(GITHUB_TIMEZONE_FORMAT);
 
@@ -137,46 +138,106 @@ function getGitHubData() {
                 commits: _.filter(commits, commit => !_.isEmpty(commit.associatedPullRequests)),
             }))
         )
+        .then(({
+            issues,
+            reviews,
+            comments,
+            commits,
+        }) => {
+            const fullDataSet = _.chain([
+                startDate,
+                ...DateUtils.enumerateDaysBetweenDates(startDate, endDate),
+                endDate,
+            ])
+                .flatten()
+                .map(date => moment(date).format('YYYY-MM-DD'))
+                .reduce((memo, date) => {
+                    memo[date] = {
+                        issues: [],
+                        reviews: [],
+                        comments: [],
+                        commits: [],
+                    }
+                    return memo;
+                }, {})
+                .value();
+
+            _.each(issues, (issue) => {
+                _.each(fullDataSet, (dataForDate, distinctDate) => {
+                    if (moment(issue.created_at).tz('America/Los_Angeles').isSame(distinctDate, 'day')) {
+                        dataForDate.issues.push(issue);
+                    }
+                })
+            })
+
+            _.each(reviews, (review) => {
+                _.each(fullDataSet, (dataForDate, distinctDate) => {
+                    if (moment(review.submitted_at).tz('America/Los_Angeles').isSame(distinctDate, 'day')) {
+                        dataForDate.reviews.push(review);
+                    }
+                })
+            })
+
+            _.each(comments, (comment) => {
+                _.each(fullDataSet, (dataForDate, distinctDate) => {
+                    if (moment(comment.created_at).tz('America/Los_Angeles').isSame(distinctDate, 'day')) {
+                        dataForDate.comments.push(comment);
+                    }
+                })
+            })
+
+            _.each(commits, (commit) => {
+                _.each(fullDataSet, (dataForDate, distinctDate) => {
+                    if (moment(commit.commit.author.date).tz('America/Los_Angeles').isSame(distinctDate, 'day')) {
+                        dataForDate.commits.push(commit);
+                    }
+                })
+            })
+
+            return fullDataSet;
+        })
         .catch((e) => {
             console.error('Error: Unexpected GitHub API error –', e);
-            printUsage();
+            exit(1);
         });
 }
 
-// Format date to match 10am output
-const outputDate = moment(argv.date).format('MMM Do YYYY dddd').toUpperCase();
 getGitHubData()
-    .then(({issues, reviews, comments, commits}) => {
-        let output = `\n${outputDate} [Note: GH Activity]\n`;
-        _.each(issues, issue => output += `• GH: Created [${issue.pull_request ? 'PR' : 'Issue'} #${issue.number}](${issue.html_url}) – ${issue.title}\n`);
+    .then((dataset) => {
+        let output = '';
+        _.each(dataset, ({issues, reviews, comments, commits}, date) => {
+            const outputDate = moment(date).format('MMM Do YYYY').toUpperCase();
+            output += `\n${outputDate} [Note: GH Activity]\n`;
+            _.each(issues, issue => output += `• GH: Created [${issue.pull_request ? 'PR' : 'Issue'} #${issue.number}](${issue.html_url}) – ${issue.title}\n`);
 
-        const updatedPRsWithCommits = _.chain(commits)
-            .reduce(
-                (memo, commit) => {
-                    _.each(commit.associatedPullRequests, pr => {
-                        if (!_.has(memo, pr.number)) {
-                            memo[pr.number] = {
-                                url: pr.html_url,
-                                commits: [commit],
+            const updatedPRsWithCommits = _.chain(commits)
+                .reduce(
+                    (memo, commit) => {
+                        _.each(commit.associatedPullRequests, pr => {
+                            if (!_.has(memo, pr.number)) {
+                                memo[pr.number] = {
+                                    url: pr.html_url,
+                                    commits: [commit],
+                                }
+                            } else {
+                                memo[pr.number].commits += commit;
                             }
-                        } else {
-                            memo[pr.number].commits += commit;
-                        }
-                    })
-                    return memo;
-                },
-                {},
-            )
-            .omit(_.pluck(issues, 'number'))
-            .value();
+                        })
+                        return memo;
+                    },
+                    {},
+                )
+                .omit(_.pluck(issues, 'number'))
+                .value();
 
-        _.each(updatedPRsWithCommits, (prWithCommits, prNumber) => {
-            output += `• GH: Updated PR #${prNumber} with the following commits: [\n\t• ${_.pluck(prWithCommits.commits, 'html_url').join('\n\t• ')}\n  ]\n`;
-        })
+            _.each(updatedPRsWithCommits, (prWithCommits, prNumber) => {
+                output += `• GH: Updated PR #${prNumber} with the following commits: [\n\t• ${_.pluck(prWithCommits.commits, 'html_url').join('\n\t• ')}\n  ]\n`;
+            });
 
-        _.each(reviews, review => output += `• GH: [Reviewed PR #${review.pull_request_url.split('/').pop()}](${review.html_url})`)
-        if (!_.isEmpty(comments)) {
-            output += `• GH: Comments – [\n\t• ${_.pluck(comments, 'html_url').join('\n\t• ')}\n  ]\n`;
-        }
+            _.each(reviews, review => output += `• GH: [Reviewed PR #${review.pull_request_url.split('/').pop()}](${review.html_url})`);
+            if (!_.isEmpty(comments)) {
+                output += `• GH: Comments – [\n\t• ${_.pluck(comments, 'html_url').join('\n\t• ')}\n  ]\n`;
+            }
+        });
         console.log(output);
     });
