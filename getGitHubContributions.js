@@ -210,11 +210,11 @@ getGitHubData()
         _.each(dataset, ({issues, reviews, comments, commits}, date) => {
             if (!_.every([issues, reviews, comments, commits], item => _.isEmpty(item))) {
                 const outputDate = moment(date).format('MMM Do YYYY').toUpperCase();
-                output += `<h3>${outputDate} <a href='https://github.com/${username}?tab=overview&from=${date}&to=${date}'>[Note: GH Activity]</a></h3>`;
+                output += `<h3>${outputDate} <a href='https://github.com/${username}?tab=overview&from=${date}&to=${date}'><span style='background-color: #6e549480;'>[Note: GH Activity]</span></a></h3>`;
                 output += '<ul>';
 
                 if (!_.isEmpty(issues)) {
-                    _.each(issues, issue => output += `<li> GH: Created <a href='${issue.html_url}'>${issue.pull_request ? 'PR' : 'Issue'} #${issue.number}</a> &mdash; ${issue.title}</li>`);
+                    _.each(issues, issue => output += `<li><span style='background-color: #6e549480;'>GH:</span> Created <a href='${issue.html_url}'>${issue.pull_request ? 'PR' : 'Issue'} #${issue.number}</a> &mdash; ${issue.title}</li>`);
                 }
 
                 const updatedPRsWithCommits = _.chain(commits)
@@ -239,16 +239,16 @@ getGitHubData()
 
                 if (!_.isEmpty(updatedPRsWithCommits)) {
                     _.each(updatedPRsWithCommits, (prWithCommits, prNumber) => {
-                        output += `<li>GH: Updated PR #${prNumber} with the following commits:<ul>${_.map(_.pluck(prWithCommits.commits, 'html_url'), url => `<li><a href='${url}'>${url.split('/').pop().substring(0, 7)}</a></li>`).join('')}</ul></li>`;
+                        output += `<li><span style='background-color: #6e549480;'>GH:</span> Updated PR #${prNumber} with the following commits:<ul>${_.map(_.pluck(prWithCommits.commits, 'html_url'), url => `<li><a href='${url}'>${url.split('/').pop().substring(0, 7)}</a></li>`).join('')}</ul></li>`;
                     });
                 }
 
                 if (!_.isEmpty(reviews)) {
-                    _.each(reviews, review => output += `<li>GH: <a href='${review.html_url}'>Reviewed PR #${review.pull_request_url.split('/').pop()}</a></li>`);
+                    _.each(reviews, review => output += `<li><span style='background-color: #6e549480;'>GH:</span> <a href='${review.html_url}'>Reviewed PR #${review.pull_request_url.split('/').pop()}</a></li>`);
                 }
 
                 if (!_.isEmpty(comments)) {
-                    output += `<li>GH: Comments:<ul>${_.map(_.pluck(comments, 'html_url'), url => `<li><a href='${url}'>${url.slice('https://github.com/Expensify/'.length)}</a></li>`).join('')}</ul></li>`;
+                    output += `<li><span style='background-color: #6e549480;'>GH:</span> Comments:<ul>${_.map(_.pluck(comments, 'html_url'), url => `<li><a href='${url}'>${url.slice('https://github.com/Expensify/'.length)}</a></li>`).join('')}</ul></li>`;
                 }
 
                 output += '</ul>';
