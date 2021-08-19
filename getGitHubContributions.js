@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
 const _ = require('underscore');
-const { exit } = require('process');
+const {exit} = require('process');
+const {writeFileSync} = require('fs')
 const moment = require('moment-timezone');
 const {Octokit} = require('@octokit/rest');
 const {throttling} = require('@octokit/plugin-throttling');
@@ -14,6 +15,7 @@ const argv = yargs
         'date': {type: 'string', alias: 'd', describe: 'Specific date to find data for', conflicts: ['startDate', 'endDate']},
         'startDate': {type: 'string', describe: 'Beginning of date range to find data for', implies: 'endDate', conflicts: 'date'},
         'endDate': {type: 'string', describe: 'End of date range to find data for', implies: 'startDate', conflicts: 'date'},
+        'outputFile': {type: 'string', alias: 'o', describe: 'Filepath for output file', default: 'output.html'},
     })
     .check((argv) => {
         _.each(_.pick(argv, ['date', 'startDate', 'endDate']), (date, option) => {
@@ -57,8 +59,8 @@ const octokit = new OctokitThrottled({
     },
 });
 
+let username = '';
 function getGitHubData() {
-    let username;
     return octokit.users.getAuthenticated()
         .then(({data}) => username = data.login)
         .then(() => Promise.all([
@@ -206,38 +208,51 @@ getGitHubData()
     .then((dataset) => {
         let output = '';
         _.each(dataset, ({issues, reviews, comments, commits}, date) => {
-            const outputDate = moment(date).format('MMM Do YYYY').toUpperCase();
-            output += `\n${outputDate} [Note: GH Activity]\n`;
-            _.each(issues, issue => output += `• GH: Created [${issue.pull_request ? 'PR' : 'Issue'} #${issue.number}](${issue.html_url}) – ${issue.title}\n`);
+            if (!_.every([issues, reviews, comments, commits], item => _.isEmpty(item))) {
+                const outputDate = moment(date).format('MMM Do YYYY').toUpperCase();
+                output += `<h3>${outputDate} <a href='https://github.com/${username}?tab=overview&from=${date}&to=${date}'>[Note: GH Activity]</a></h3>`;
+                output += '<ul>';
 
-            const updatedPRsWithCommits = _.chain(commits)
-                .reduce(
-                    (memo, commit) => {
-                        _.each(commit.associatedPullRequests, pr => {
-                            if (!_.has(memo, pr.number)) {
-                                memo[pr.number] = {
-                                    url: pr.html_url,
-                                    commits: [commit],
+                if (!_.isEmpty(issues)) {
+                    _.each(issues, issue => output += `<li> GH: Created <a href='${issue.html_url}'>${issue.pull_request ? 'PR' : 'Issue'} #${issue.number}</a> &mdash; ${issue.title}</li>`);
+                }
+
+                const updatedPRsWithCommits = _.chain(commits)
+                    .reduce(
+                        (memo, commit) => {
+                            _.each(commit.associatedPullRequests, pr => {
+                                if (!_.has(memo, pr.number)) {
+                                    memo[pr.number] = {
+                                        url: pr.html_url,
+                                        commits: [commit],
+                                    }
+                                } else {
+                                    memo[pr.number].commits.push(commit);
                                 }
-                            } else {
-                                memo[pr.number].commits.push(commit);
-                            }
-                        })
-                        return memo;
-                    },
-                    {},
-                )
-                .omit(_.pluck(issues, 'number'))
-                .value();
+                            })
+                            return memo;
+                        },
+                        {},
+                    )
+                    .omit(_.pluck(issues, 'number'))
+                    .value();
 
-            _.each(updatedPRsWithCommits, (prWithCommits, prNumber) => {
-                output += `• GH: Updated PR #${prNumber} with the following commits: [\n\t• ${_.pluck(prWithCommits.commits, 'html_url').join('\n\t• ')}\n  ]\n`;
-            });
+                if (!_.isEmpty(updatedPRsWithCommits)) {
+                    _.each(updatedPRsWithCommits, (prWithCommits, prNumber) => {
+                        output += `<li>GH: Updated PR #${prNumber} with the following commits:<ul>${_.map(_.pluck(prWithCommits.commits, 'html_url'), url => `<li><a href='${url}'>${url.split('/').pop().substring(0, 7)}</a></li>`).join('')}</ul></li>`;
+                    });
+                }
 
-            _.each(reviews, review => output += `• GH: [Reviewed PR #${review.pull_request_url.split('/').pop()}](${review.html_url})`);
-            if (!_.isEmpty(comments)) {
-                output += `• GH: Comments – [\n\t• ${_.pluck(comments, 'html_url').join('\n\t• ')}\n  ]\n`;
+                if (!_.isEmpty(reviews)) {
+                    _.each(reviews, review => output += `<li>GH: <a href='${review.html_url}'>Reviewed PR #${review.pull_request_url.split('/').pop()}</a></li>`);
+                }
+
+                if (!_.isEmpty(comments)) {
+                    output += `<li>GH: Comments:<ul>${_.map(_.pluck(comments, 'html_url'), url => `<li><a href='${url}'>${url.slice('https://github.com/Expensify/'.length)}</a></li>`).join('')}</ul></li>`;
+                }
+
+                output += '</ul>';
             }
         });
-        console.log(output);
+        writeFileSync(argv.outputFile, output);
     });
